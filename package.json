@@ -1,0 +1,8 @@
+{
+  "name": "ey-technothon",
+  "version": "1.0.0",
+  "main": "import-workflows.js",
+  "scripts": {
+    "import-workflows": "node import-workflows.js"
+  }
+}

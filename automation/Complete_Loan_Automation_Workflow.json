@@ -1,0 +1,1469 @@
+{
+  "name": "Complete Loan Automation Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "loan-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook - Incoming Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "webhookId": "loan-webhook-entry"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Master Orchestrator - Entry Point\nconst payload = $input.item.json;\nconst { user_id, message, channel } = payload;\n\nreturn {\n  user_id,\n  message,\n  channel,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "name": "Parse Webhook Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Get or Create Conversation\nconst user_id = $input.item.json.user_id;\nconst channel = $input.item.json.channel;\n\nreturn {\n  query: {\n    table: 'conversations',\n    select: '*',\n    filter: {\n      user_id: user_id\n    },\n    order: {\n      column: 'created_at',\n      ascending: false\n    },\n    limit: 1\n  },\n  user_id,\n  channel,\n  message: $input.item.json.message\n};"
+      },
+      "name": "Get Existing Conversation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "tableId": "={{$json.query.table}}",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{$json.user_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase - Get Conversation",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.data}}",
+              "value2": "null",
+              "operation": "notEqual"
+            }
+          ]
+        }
+      },
+      "name": "Conversation Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Create New Conversation\nconst user_id = $input.item.json.user_id;\nconst channel = $input.item.json.channel;\n\nreturn {\n  insert: {\n    table: 'conversations',\n    data: {\n      user_id: user_id,\n      channel: channel,\n      current_stage: 'initial',\n      current_agent: 'sales',\n      session_data: {},\n      created_at: new Date().toISOString()\n    }\n  },\n  user_id,\n  channel,\n  message: $input.item.json.message\n};"
+      },
+      "name": "Create New Conversation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "create",
+        "tableId": "conversations",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "user_id",
+              "fieldValue": "={{$json.user_id}}"
+            },
+            {
+              "fieldName": "channel",
+              "fieldValue": "={{$json.channel}}"
+            },
+            {
+              "fieldName": "current_stage",
+              "fieldValue": "initial"
+            },
+            {
+              "fieldName": "current_agent",
+              "fieldValue": "sales"
+            },
+            {
+              "fieldName": "session_data",
+              "fieldValue": "{}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase - Create Conversation",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Log Incoming Message\nconst conversation = $input.item.json.conversation || $input.item.json.data;\nconst message = $input.item.json.message;\n\nreturn {\n  insert: {\n    table: 'conversation_messages',\n    data: {\n      conversation_id: conversation.id,\n      role: 'user',\n      content: message,\n      timestamp: new Date().toISOString()\n    }\n  },\n  conversation,\n  message\n};"
+      },
+      "name": "Log User Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Route to Agent Based on Stage\nconst conversation = $input.item.json.conversation;\nconst message = $input.item.json.message;\nconst stage = conversation.current_stage;\n\nreturn {\n  conversation,\n  message,\n  stage,\n  route: stage || 'sales'\n};"
+      },
+      "name": "Route to Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.route}}",
+              "operation": "equals"
+            }
+          ]
+        }
+      },
+      "name": "Stage Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sales Agent - Extract Information with AI\nconst conversation = $input.item.json.conversation;\nconst message = $input.item.json.message;\nconst sessionData = conversation.session_data || {};\n\nconst prompt = `You are a loan sales assistant. Extract loan information from the user's message.\n\nCurrent session data: ${JSON.stringify(sessionData)}\nUser message: \"${message}\"\n\nExtract any of these fields that are mentioned:\n- loan_amount: numeric value (convert lakhs to actual number, e.g., \"5 lakhs\" = 500000)\n- loan_purpose: text description\n- loan_tenure: number of months\n- name: full name\n- mobile: 10-digit phone number\n- email: email address\n\nReturn ONLY valid JSON with extracted fields. Only include fields explicitly mentioned.\nIf nothing was extracted, return empty object {}.`;\n\nreturn {\n  conversation,\n  message,\n  sessionData,\n  prompt,\n  aiRequest: {\n    model: 'gpt-4',\n    messages: [{ role: 'user', content: prompt }],\n    temperature: 0.3,\n    max_tokens: 500\n  }\n};"
+      },
+      "name": "Sales - Prepare AI Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{$json.aiRequest.model}}"
+            },
+            {
+              "name": "messages",
+              "value": "={{$json.aiRequest.messages}}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{$json.aiRequest.temperature}}"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{$json.aiRequest.max_tokens}}"
+            }
+          ]
+        }
+      },
+      "name": "OpenAI - Extract Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        2450,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sales - Validate and Merge Data\nconst conversation = $input.item.json.conversation;\nconst sessionData = $input.item.json.sessionData;\nconst aiResponse = $input.item.json.choices[0].message.content;\n\nlet extracted = {};\ntry {\n  extracted = JSON.parse(aiResponse.trim());\n} catch (e) {\n  extracted = {};\n}\n\n// Validate extracted data\nconst validated = {};\n\nif (extracted.loan_amount) {\n  const amount = parseInt(extracted.loan_amount);\n  if (amount >= 10000 && amount <= 10000000) {\n    validated.loan_amount = amount;\n  }\n}\n\nif (extracted.loan_tenure) {\n  const tenure = parseInt(extracted.loan_tenure);\n  if (tenure >= 6 && tenure <= 84) {\n    validated.loan_tenure = tenure;\n  }\n}\n\nif (extracted.mobile) {\n  const mobile = extracted.mobile.replace(/\\D/g, '');\n  if (mobile.length === 10 && mobile[0] >= '6') {\n    validated.mobile = mobile;\n  }\n}\n\nif (extracted.email) {\n  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  if (emailRegex.test(extracted.email)) {\n    validated.email = extracted.email.toLowerCase();\n  }\n}\n\nif (extracted.loan_purpose) validated.loan_purpose = extracted.loan_purpose;\nif (extracted.name) validated.name = extracted.name;\n\n// Merge with existing session data\nconst updatedSession = { ...sessionData, ...validated };\n\n// Check missing fields\nconst requiredFields = ['loan_amount', 'loan_purpose', 'loan_tenure', 'name', 'mobile', 'email'];\nconst missingFields = requiredFields.filter(field => !updatedSession[field]);\n\nreturn {\n  conversation,\n  updatedSession,\n  missingFields,\n  allCollected: missingFields.length === 0\n};"
+      },
+      "name": "Sales - Validate & Merge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.allCollected}}",
+              "value2": true,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Sales - All Fields Collected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sales - Ask Next Question\nconst missingFields = $input.item.json.missingFields;\nconst updatedSession = $input.item.json.updatedSession;\nconst field = missingFields[0];\n\nlet question = '';\n\nswitch (field) {\n  case 'loan_amount':\n    question = '💰 How much loan amount do you need? (e.g., 5 lakhs, 10 lakhs)';\n    break;\n  case 'loan_purpose':\n    question = '🎯 What is the purpose of this loan? (e.g., home renovation, education, business)';\n    break;\n  case 'loan_tenure':\n    question = '📅 For how many months would you like the loan? (e.g., 12, 24, 36 months)';\n    break;\n  case 'name':\n    question = '👤 May I have your full name please?';\n    break;\n  case 'mobile':\n    question = '📱 Please share your 10-digit mobile number.';\n    break;\n  case 'email':\n    question = '📧 What\\'s your email address?';\n    break;\n  default:\n    question = 'Could you provide more information?';\n}\n\nconst requiredFields = ['loan_amount', 'loan_purpose', 'loan_tenure', 'name', 'mobile', 'email'];\nconst collected = requiredFields.filter(f => updatedSession[f]);\n\nreturn {\n  message: question + `\\n\\n✓ Progress: ${collected.length}/${requiredFields.length} fields collected`,\n  updateSession: updatedSession,\n  conversationId: $input.item.json.conversation.id\n};"
+      },
+      "name": "Sales - Ask Question",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3050,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sales - Complete Lead Capture\nconst conversation = $input.item.json.conversation;\nconst sessionData = $input.item.json.updatedSession;\n\nreturn {\n  lead: {\n    conversation_id: conversation.id,\n    name: sessionData.name,\n    mobile: sessionData.mobile,\n    email: sessionData.email,\n    loan_amount: sessionData.loan_amount,\n    loan_purpose: sessionData.loan_purpose,\n    loan_tenure: sessionData.loan_tenure,\n    status: 'initiated',\n    created_at: new Date().toISOString()\n  },\n  sessionData,\n  conversationId: conversation.id\n};"
+      },
+      "name": "Sales - Create Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3050,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "create",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "conversation_id",
+              "fieldValue": "={{$json.lead.conversation_id}}"
+            },
+            {
+              "fieldName": "name",
+              "fieldValue": "={{$json.lead.name}}"
+            },
+            {
+              "fieldName": "mobile",
+              "fieldValue": "={{$json.lead.mobile}}"
+            },
+            {
+              "fieldName": "email",
+              "fieldValue": "={{$json.lead.email}}"
+            },
+            {
+              "fieldName": "loan_amount",
+              "fieldValue": "={{$json.lead.loan_amount}}"
+            },
+            {
+              "fieldName": "loan_purpose",
+              "fieldValue": "={{$json.lead.loan_purpose}}"
+            },
+            {
+              "fieldName": "loan_tenure",
+              "fieldValue": "={{$json.lead.loan_tenure}}"
+            },
+            {
+              "fieldName": "status",
+              "fieldValue": "initiated"
+            }
+          ]
+        }
+      },
+      "name": "Supabase - Create Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sales - Format Success Message\nconst lead = $input.item.json;\nconst sessionData = $input.item.json.sessionData;\n\nreturn {\n  message: `Perfect! I've captured all your details.\n\n📋 Application Summary:\n━━━━━━━━━━━━━━━━━━━━\n👤 Name: ${sessionData.name}\n📱 Mobile: ${sessionData.mobile}\n📧 Email: ${sessionData.email}\n💰 Loan Amount: ₹${sessionData.loan_amount.toLocaleString('en-IN')}\n🎯 Purpose: ${sessionData.loan_purpose}\n📅 Tenure: ${sessionData.loan_tenure} months\n\n✅ Lead ID: ${lead.id}\n\n━━━━━━━━━━━━━━━━━━━━\n📄 Next Step: Document Verification\n\nI'll need you to upload:\n1️⃣ PAN Card (clear photo)\n2️⃣ Aadhaar Card (both sides)\n\nReady to proceed? Reply 'yes' to continue.`,\n  conversationUpdate: {\n    current_stage: 'verification',\n    current_agent: 'verification',\n    session_data: sessionData\n  },\n  conversationId: $input.item.json.conversationId\n};"
+      },
+      "name": "Sales - Format Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3450,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Verification - Get Application\nconst conversation = $input.item.json.conversation;\nconst message = $input.item.json.message;\n\nreturn {\n  query: {\n    table: 'leads',\n    select: '*',\n    filter: {\n      conversation_id: conversation.id\n    },\n    single: true\n  },\n  conversation,\n  message\n};"
+      },
+      "name": "Verification - Get Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Verification - Get or Create Application\nconst lead = $input.item.json.lead;\nconst conversation = $input.item.json.conversation;\n\nconst appNumber = 'LN' + Date.now() + Math.floor(Math.random() * 1000).toString().padStart(3, '0');\n\nreturn {\n  application: {\n    lead_id: lead.id,\n    application_number: appNumber,\n    status: 'pending',\n    created_at: new Date().toISOString()\n  },\n  conversation,\n  message: $input.item.json.message\n};"
+      },
+      "name": "Verification - Create Application",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Verification - Parse Intent\nconst message = $input.item.json.message;\nconst lower = message.toLowerCase();\n\nlet intent = 'unknown';\n\nif (lower.includes('ready') || lower === 'yes' || lower.includes('proceed')) {\n  intent = 'ready';\n} else if (lower.includes('status') || lower.includes('check')) {\n  intent = 'status';\n}\n\nreturn {\n  ...($input.item.json),\n  intent\n};"
+      },
+      "name": "Verification - Parse Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Verification - Prompt for Documents\nconst application = $input.item.json.application;\n\nreturn {\n  message: `📄 Document Upload - Application #${application.application_number}\n\n📌 Step 1: Upload PAN Card\n\nPlease send a clear photo of your PAN card.\n\nRequirements:\n✓ All details clearly visible\n✓ No blur or glare\n✓ Full card in frame\n\nJust send the image, I'll automatically process it.`,\n  application\n};"
+      },
+      "name": "Verification - Document Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Underwriting - Get Application Details\nconst conversation = $input.item.json.conversation;\n\nreturn {\n  query: {\n    table: 'applications',\n    select: '*, leads(*), documents(*)',\n    filter: {\n      'leads.conversation_id': conversation.id\n    },\n    single: true\n  },\n  conversation\n};"
+      },
+      "name": "Underwriting - Get App",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Underwriting - Calculate DTI and Risk\nconst application = $input.item.json.application;\nconst lead = application.leads;\nconst documents = application.documents;\n\n// Mock credit data (would come from API)\nconst creditScore = 680;\nconst monthlyIncome = 50000;\nconst existingObligations = 5000;\n\n// Calculate EMI\nconst loanAmount = lead.loan_amount;\nconst tenure = lead.loan_tenure;\nconst annualRate = 10;\nconst monthlyRate = annualRate / (12 * 100);\n\nconst emi = (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, tenure)) \n            / (Math.pow(1 + monthlyRate, tenure) - 1);\n\n// Calculate DTI\nconst totalObligations = existingObligations + emi;\nconst dtiRatio = (totalObligations / monthlyIncome) * 100;\n\n// Assess Risk\nlet decision = {\n  status: 'REJECTED',\n  risk_level: 'HIGH',\n  approved_amount: 0,\n  interest_rate: 0,\n  reason: ''\n};\n\nif (creditScore >= 750 && dtiRatio < 40) {\n  decision = {\n    status: 'APPROVED',\n    risk_level: 'LOW',\n    approved_amount: loanAmount,\n    interest_rate: 8.5,\n    reason: 'Excellent credit profile with strong repayment capacity.'\n  };\n} else if (creditScore >= 700 && dtiRatio < 45) {\n  decision = {\n    status: 'APPROVED',\n    risk_level: 'LOW',\n    approved_amount: loanAmount,\n    interest_rate: 9.5,\n    reason: 'Strong credit score with good debt management.'\n  };\n} else if (creditScore >= 680 && dtiRatio < 50) {\n  decision = {\n    status: 'APPROVED',\n    risk_level: 'MEDIUM',\n    approved_amount: Math.floor(loanAmount * 0.9),\n    interest_rate: 10.5,\n    reason: 'Good credit standing. Approved for 90% of requested amount.'\n  };\n} else if (creditScore >= 650 && dtiRatio < 50) {\n  decision = {\n    status: 'APPROVED',\n    risk_level: 'MEDIUM',\n    approved_amount: Math.floor(loanAmount * 0.8),\n    interest_rate: 11.5,\n    reason: 'Moderate risk profile. Approved for 80% of requested amount.'\n  };\n} else if (creditScore < 600) {\n  decision.reason = 'Credit score below minimum threshold (600).';\n} else if (dtiRatio >= 55) {\n  decision.reason = 'Debt-to-income ratio exceeds acceptable limit.';\n}\n\nreturn {\n  underwriting: {\n    application_id: application.id,\n    credit_score: creditScore,\n    dti_ratio: parseFloat(dtiRatio.toFixed(2)),\n    risk_assessment: decision.risk_level,\n    approved_amount: decision.approved_amount,\n    interest_rate: decision.interest_rate,\n    decision: decision.status,\n    decision_reason: decision.reason,\n    created_at: new Date().toISOString()\n  },\n  application,\n  lead\n};"
+      },
+      "name": "Underwriting - Assess Risk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "create",
+        "tableId": "underwriting",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "application_id",
+              "fieldValue": "={{$json.underwriting.application_id}}"
+            },
+            {
+              "fieldName": "credit_score",
+              "fieldValue": "={{$json.underwriting.credit_score}}"
+            },
+            {
+              "fieldName": "dti_ratio",
+              "fieldValue": "={{$json.underwriting.dti_ratio}}"
+            },
+            {
+              "fieldName": "risk_assessment",
+              "fieldValue": "={{$json.underwriting.risk_assessment}}"
+            },
+            {
+              "fieldName": "approved_amount",
+              "fieldValue": "={{$json.underwriting.approved_amount}}"
+            },
+            {
+              "fieldName": "interest_rate",
+              "fieldValue": "={{$json.underwriting.interest_rate}}"
+            },
+            {
+              "fieldName": "decision",
+              "fieldValue": "={{$json.underwriting.decision}}"
+            },
+            {
+              "fieldName": "decision_reason",
+              "fieldValue": "={{$json.underwriting.decision_reason}}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase - Save Underwriting",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.underwriting.decision}}",
+              "value2": "APPROVED",
+              "operation": "equals"
+            }
+          ]
+        }
+      },
+      "name": "Underwriting - Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Underwriting - Format Approved Message\nconst underwriting = $input.item.json.underwriting;\nconst lead = $input.item.json.lead;\n\nconst monthlyRate = underwriting.interest_rate / (12 * 100);\nconst emi = (underwriting.approved_amount * monthlyRate * Math.pow(1 + monthlyRate, lead.loan_tenure)) \n            / (Math.pow(1 + monthlyRate, lead.loan_tenure) - 1);\n\nreturn {\n  message: `🎉 CONGRATULATIONS! Your Loan is APPROVED!\n\n━━━━━━━━━━━━━━━━━━━━\n📊 CREDIT ASSESSMENT RESULTS\n━━━━━━━━━━━━━━━━━━━━\n\n✅ Decision: APPROVED\n🎯 Risk Level: ${underwriting.risk_assessment}\n📈 Credit Score: ${underwriting.credit_score}\n📊 DTI Ratio: ${underwriting.dti_ratio}%\n\n━━━━━━━━━━━━━━━━━━━━\n💰 LOAN DETAILS\n━━━━━━━━━━━━━━━━━━━━\n\nRequested Amount: ₹${lead.loan_amount.toLocaleString('en-IN')}\nApproved Amount: ₹${underwriting.approved_amount.toLocaleString('en-IN')}\nInterest Rate: ${underwriting.interest_rate}% p.a.\nTenure: ${lead.loan_tenure} months\nMonthly EMI: ₹${Math.round(emi).toLocaleString('en-IN')}\n\n━━━━━━━━━━━━━━━━━━━━\n📄 NEXT STEPS\n━━━━━━━━━━━━━━━━━━━━\n\n1️⃣ Sanction letter will be generated\n2️⃣ You'll receive it via email\n3️⃣ Review and accept the terms\n4️⃣ Disbursement within 24 hours\n\n${underwriting.decision_reason}\n\n⏱️ Generating your sanction letter now...`,\n  conversationUpdate: {\n    current_stage: 'sanction',\n    current_agent: 'sanction'\n  }\n};"
+      },
+      "name": "Underwriting - Approved Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3050,
+        450
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Underwriting - Format Rejected Message\nconst underwriting = $input.item.json.underwriting;\n\nreturn {\n  message: `❌ LOAN APPLICATION STATUS\n\n━━━━━━━━━━━━━━━━━━━━\n📊 ASSESSMENT RESULTS\n━━━━━━━━━━━━━━━━━━━━\n\nDecision: NOT APPROVED\nCredit Score: ${underwriting.credit_score}\nDTI Ratio: ${underwriting.dti_ratio}%\nRisk Level: ${underwriting.risk_assessment}\n\n━━━━━━━━━━━━━━━━━━━━\n📝 REASON\n━━━━━━━━━━━━━━━━━━━━\n\n${underwriting.decision_reason}\n\n━━━━━━━━━━━━━━━━━━━━\n💡 RECOMMENDATIONS\n━━━━━━━━━━━━━━━━━━━━\n\nTo improve your chances:\n1️⃣ Improve Credit Score\n2️⃣ Reduce Debt Burden\n3️⃣ Increase Income\n4️⃣ Apply for Lower Amount\n\nYou can reapply after 3-6 months.`\n};"
+      },
+      "name": "Underwriting - Rejected Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3050,
+        550
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Get Approved Application\nconst conversation = $input.item.json.conversation;\n\nreturn {\n  query: {\n    table: 'applications',\n    select: '*, leads(*), underwriting(*)',\n    filter: {\n      'leads.conversation_id': conversation.id,\n      'status': 'approved',\n      'underwriting.decision': 'APPROVED'\n    },\n    single: true\n  },\n  conversation\n};"
+      },
+      "name": "Sanction - Get Approved App",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Calculate Loan Details\nconst application = $input.item.json.application;\nconst lead = application.leads;\nconst underwriting = application.underwriting;\n\nconst principal = underwriting.approved_amount;\nconst annualRate = underwriting.interest_rate;\nconst tenureMonths = lead.loan_tenure;\n\nconst monthlyRate = annualRate / (12 * 100);\nconst emi = (principal * monthlyRate * Math.pow(1 + monthlyRate, tenureMonths)) \n            / (Math.pow(1 + monthlyRate, tenureMonths) - 1);\n\nconst roundedEmi = Math.round(emi);\nconst totalRepayment = roundedEmi * tenureMonths;\nconst totalInterest = totalRepayment - principal;\nconst processingFee = Math.round(principal * 0.01);\n\nconst sanctionNumber = 'SN' + Date.now() + Math.floor(Math.random() * 1000).toString().padStart(3, '0');\n\nreturn {\n  application,\n  lead,\n  underwriting,\n  loanDetails: {\n    emi: roundedEmi,\n    totalRepayment,\n    totalInterest,\n    processingFee\n  },\n  sanctionNumber\n};"
+      },
+      "name": "Sanction - Calculate Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Generate HTML Letter\nconst data = $input.item.json;\nconst { sanctionNumber, lead, underwriting, loanDetails, application } = data;\n\nconst html = `<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <style>\n        * { margin: 0; padding: 0; box-sizing: border-box; }\n        body { \n            font-family: 'Arial', sans-serif;\n            line-height: 1.6;\n            color: #333;\n            padding: 40px;\n            max-width: 800px;\n            margin: 0 auto;\n        }\n        .header {\n            text-align: center;\n            margin-bottom: 40px;\n            border-bottom: 3px solid #2563eb;\n            padding-bottom: 20px;\n        }\n        .company-name {\n            font-size: 28px;\n            font-weight: bold;\n            color: #2563eb;\n        }\n        table {\n            width: 100%;\n            border-collapse: collapse;\n            margin: 20px 0;\n        }\n        table td {\n            padding: 12px;\n            border: 1px solid #d1d5db;\n        }\n        table td:first-child {\n            font-weight: bold;\n            background-color: #f3f4f6;\n            width: 45%;\n        }\n    </style>\n</head>\n<body>\n    <div class=\"header\">\n        <div class=\"company-name\">LOAN COMPANY NAME</div>\n        <div>Email: loans@company.com | Phone: 1800-XXX-XXXX</div>\n    </div>\n    <div style=\"text-align: right;\">\n        <strong>Date:</strong> ${new Date().toLocaleDateString('en-IN')}<br>\n        <strong>Sanction Number:</strong> ${sanctionNumber}\n    </div>\n    <h2 style=\"text-align: center; margin: 30px 0;\">LOAN SANCTION LETTER</h2>\n    <p>Dear ${lead.name},</p>\n    <p>We are pleased to inform you that your loan application has been approved.</p>\n    <h3>Loan Details</h3>\n    <table>\n        <tr><td>Loan Amount</td><td>₹${underwriting.approved_amount.toLocaleString('en-IN')}</td></tr>\n        <tr><td>Interest Rate</td><td>${underwriting.interest_rate}% per annum</td></tr>\n        <tr><td>Tenure</td><td>${lead.loan_tenure} months</td></tr>\n        <tr><td>Monthly EMI</td><td>₹${loanDetails.emi.toLocaleString('en-IN')}</td></tr>\n        <tr><td>Total Repayment</td><td>₹${loanDetails.totalRepayment.toLocaleString('en-IN')}</td></tr>\n        <tr><td>Processing Fee</td><td>₹${loanDetails.processingFee.toLocaleString('en-IN')}</td></tr>\n    </table>\n</body>\n</html>`;\n\nreturn {\n  ...data,\n  html,\n  fileName: `${sanctionNumber}.html`\n};"
+      },
+      "name": "Sanction - Generate HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "loan-documents",
+        "fileName": "={{$json.fileName}}",
+        "fileContent": "={{$json.html}}",
+        "options": {
+          "contentType": "text/html"
+        }
+      },
+      "name": "Supabase - Upload Sanction Letter",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Save Record\nconst data = $input.item.json;\nconst pdfUrl = data.publicUrl || data.path;\n\nreturn {\n  sanction: {\n    application_id: data.application.id,\n    sanction_number: data.sanctionNumber,\n    sanction_amount: data.underwriting.approved_amount,\n    interest_rate: data.underwriting.interest_rate,\n    tenure_months: data.lead.loan_tenure,\n    emi_amount: data.loanDetails.emi,\n    sanction_letter_url: pdfUrl,\n    disbursement_status: 'pending',\n    created_at: new Date().toISOString()\n  },\n  lead: data.lead,\n  loanDetails: data.loanDetails,\n  sanctionNumber: data.sanctionNumber\n};"
+      },
+      "name": "Sanction - Prepare Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3050,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "create",
+        "tableId": "sanctions",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "application_id",
+              "fieldValue": "={{$json.sanction.application_id}}"
+            },
+            {
+              "fieldName": "sanction_number",
+              "fieldValue": "={{$json.sanction.sanction_number}}"
+            },
+            {
+              "fieldName": "sanction_amount",
+              "fieldValue": "={{$json.sanction.sanction_amount}}"
+            },
+            {
+              "fieldName": "interest_rate",
+              "fieldValue": "={{$json.sanction.interest_rate}}"
+            },
+            {
+              "fieldName": "tenure_months",
+              "fieldValue": "={{$json.sanction.tenure_months}}"
+            },
+            {
+              "fieldName": "emi_amount",
+              "fieldValue": "={{$json.sanction.emi_amount}}"
+            },
+            {
+              "fieldName": "sanction_letter_url",
+              "fieldValue": "={{$json.sanction.sanction_letter_url}}"
+            },
+            {
+              "fieldName": "disbursement_status",
+              "fieldValue": "pending"
+            }
+          ]
+        }
+      },
+      "name": "Supabase - Save Sanction",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Format Success Message\nconst sanction = $input.item.json;\nconst lead = sanction.lead;\nconst loanDetails = sanction.loanDetails;\n\nreturn {\n  message: `📧 SANCTION LETTER GENERATED & SENT!\n\n━━━━━━━━━━━━━━━━━━━━\n✅ YOUR LOAN IS SANCTIONED\n━━━━━━━━━━━━━━━━━━━━\n\n📄 Sanction Number: ${sanction.sanction_number}\n📅 Date: ${new Date().toLocaleDateString('en-IN')}\n\n💰 LOAN SUMMARY\n━━━━━━━━━━━━━━━━━━━━\nSanctioned Amount: ₹${sanction.sanction_amount.toLocaleString('en-IN')}\nInterest Rate: ${sanction.interest_rate}% p.a.\nTenure: ${sanction.tenure_months} months\nMonthly EMI: ₹${sanction.emi_amount.toLocaleString('en-IN')}\nTotal Interest: ₹${loanDetails.totalInterest.toLocaleString('en-IN')}\nTotal Repayment: ₹${loanDetails.totalRepayment.toLocaleString('en-IN')}\n\n━━━━━━━━━━━━━━━━━━━━\n📬 SENT TO YOUR EMAIL\n━━━━━━━━━━━━━━━━━━━━\n\n✉️  ${lead.email}\n\n━━━━━━━━━━━━━━━━━━━━\n⚡ NEXT STEPS\n━━━━━━━━━━━━━━━━━━━━\n\n1️⃣ Review the sanction letter\n2️⃣ Accept within 7 days\n3️⃣ Complete documentation\n4️⃣ Receive disbursement\n\n⏰ Valid for 30 days\n\n━━━━━━━━━━━━━━━━━━━━\n💬 QUICK ACTIONS\n━━━━━━━━━━━━━━━━━━━━\n\nReply \"ACCEPT\" - Accept this sanction\nReply \"QUESTIONS\" - Ask us anything\nReply \"STATUS\" - Check application status\n\nThank you for choosing us! 🙏`,\n  conversationUpdate: {\n    current_stage: 'completed',\n    current_agent: 'none'\n  }\n};"
+      },
+      "name": "Sanction - Format Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3450,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "loans@yourcompany.com",
+        "toEmail": "={{$json.lead.email}}",
+        "subject": "Loan Sanctioned! - {{$json.sanction_number}}",
+        "emailType": "html",
+        "html": "<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n  <div style=\"background: #2563eb; color: white; padding: 30px; text-align: center;\">\n    <h1>🎉 Congratulations!</h1>\n    <p>Your Loan has been Sanctioned</p>\n  </div>\n  <div style=\"padding: 30px;\">\n    <p>Dear {{$json.lead.name}},</p>\n    <p>Your loan application has been approved!</p>\n    <div style=\"background: white; padding: 20px; margin: 20px 0;\">\n      <h3>Loan Summary</h3>\n      <p><strong>Amount:</strong> ₹{{$json.sanction_amount}}</p>\n      <p><strong>EMI:</strong> ₹{{$json.emi_amount}}</p>\n      <p><strong>Tenure:</strong> {{$json.tenure_months}} months</p>\n    </div>\n  </div>\n</div>",
+        "options": {}
+      },
+      "name": "Send Sanction Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        3650,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Check Existing\nconst conversation = $input.item.json.conversation;\nconst message = $input.item.json.message;\n\nreturn {\n  query: {\n    table: 'sanctions',\n    select: '*, applications(*, leads(*), underwriting(*))',\n    filter: {\n      'applications.leads.conversation_id': conversation.id\n    },\n    single: true\n  },\n  conversation,\n  message\n};"
+      },
+      "name": "Sanction - Check Existing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.data}}",
+              "value2": "null",
+              "operation": "notEqual"
+            }
+          ]
+        }
+      },
+      "name": "Sanction - Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Route Existing Message\nconst sanction = $input.item.json.data;\nconst message = $input.item.json.message;\nconst lowerMessage = message.toLowerCase();\n\nlet action = 'default';\n\nif (lowerMessage.includes('accept') || lowerMessage === 'yes') {\n  action = 'accept';\n} else if (lowerMessage.includes('reject') || lowerMessage.includes('decline')) {\n  action = 'reject';\n} else if (lowerMessage.includes('status')) {\n  action = 'status';\n} else if (lowerMessage.includes('question') || lowerMessage.includes('faq')) {\n  action = 'questions';\n} else if (lowerMessage.includes('emi')) {\n  action = 'emi';\n} else if (lowerMessage.includes('charge') || lowerMessage.includes('fee')) {\n  action = 'charges';\n}\n\nreturn {\n  sanction,\n  action,\n  message\n};"
+      },
+      "name": "Sanction - Route Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        850
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Handle Accept\nconst sanction = $input.item.json.sanction;\n\nreturn {\n  update: {\n    disbursement_status: 'accepted',\n    accepted_at: new Date().toISOString()\n  },\n  sanctionId: sanction.id,\n  sanction\n};"
+      },
+      "name": "Sanction - Accept Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        750
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "tableId": "sanctions",
+        "updateKey": "id",
+        "id": "={{$json.sanctionId}}",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "disbursement_status",
+              "fieldValue": "accepted"
+            },
+            {
+              "fieldName": "accepted_at",
+              "fieldValue": "={{$json.update.accepted_at}}"
+            }
+          ]
+        }
+      },
+      "name": "Supabase - Update Accept",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3050,
+        750
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Accept Message\nconst sanction = $input.item.json.sanction;\n\nreturn {\n  message: `✅ SANCTION ACCEPTED!\n\nThank you for accepting the loan sanction.\n\n━━━━━━━━━━━━━━━━━━━━\n🚀 DISBURSEMENT PROCESS\n━━━━━━━━━━━━━━━━━━━━\n\nYour loan will be disbursed within 24-48 hours.\n\n⏳ Next Steps:\n1. 📑 Loan Agreement: Will be sent for e-signature\n2. 💰 Processing Fee: ₹${Math.round(sanction.sanction_amount * 0.01).toLocaleString('en-IN')}\n3. 🏦 Bank Transfer: Direct to your account\n4. 📲 Notification: SMS and email confirmation\n\n━━━━━━━━━━━━━━━━━━━━\n💳 FIRST EMI DUE\n━━━━━━━━━━━━━━━━━━━━\n₹${sanction.emi_amount.toLocaleString('en-IN')} on 5th of next month.\n\nThank you! 🙏`\n};"
+      },
+      "name": "Sanction - Accept Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        750
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Handle Reject\nconst sanction = $input.item.json.sanction;\n\nreturn {\n  message: `❌ SANCTION DECLINED\n\n━━━━━━━━━━━━━━━━━━━━\n📋 DETAILS\n━━━━━━━━━━━━━━━━━━━━\nSanction Number: ${sanction.sanction_number}\nAmount: ₹${sanction.sanction_amount.toLocaleString('en-IN')}\n\n━━━━━━━━━━━━━━━━━━━━\n🔄 ALTERNATIVES\n━━━━━━━━━━━━━━━━━━━━\nThe sanction remains valid for 30 days.\nYou can still accept by replying \"ACCEPT\"\n\nThank you for considering us!`\n};"
+      },
+      "name": "Sanction - Reject Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        850
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Status Response\nconst sanction = $input.item.json.sanction;\n\nlet statusMessage = '';\nlet nextSteps = '';\n\nswitch(sanction.disbursement_status) {\n  case 'pending':\n    statusMessage = `⏳ AWAITING ACCEPTANCE\nSanction Status: Pending your acceptance`;\n    nextSteps = 'Reply \"ACCEPT\" to proceed';\n    break;\n  case 'accepted':\n    statusMessage = `✅ SANCTION ACCEPTED\nStatus: Disbursement in progress`;\n    nextSteps = 'Funds will be transferred within 24-48 hours';\n    break;\n  case 'rejected':\n    statusMessage = `❌ SANCTION DECLINED\nStatus: Rejected by you`;\n    nextSteps = 'Can still be accepted within 30 days';\n    break;\n}\n\nreturn {\n  message: `📊 APPLICATION STATUS\n━━━━━━━━━━━━━━━━━━━━\n\n${statusMessage}\n\n━━━━━━━━━━━━━━━━━━━━\n📋 DETAILS\n━━━━━━━━━━━━━━━━━━━━\nSanction Number: ${sanction.sanction_number}\nAmount: ₹${sanction.sanction_amount.toLocaleString('en-IN')}\nMonthly EMI: ₹${sanction.emi_amount.toLocaleString('en-IN')}\n\n━━━━━━━━━━━━━━━━━━━━\n🚀 NEXT STEP\n━━━━━━━━━━━━━━━━━━━━\n${nextSteps}`\n};"
+      },
+      "name": "Sanction - Status Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        950
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Sanction - Default Response\nconst sanction = $input.item.json.sanction;\n\nreturn {\n  message: `📨 Your sanctioned loan details:\n\nSanction Number: ${sanction.sanction_number}\nAmount: ₹${sanction.sanction_amount.toLocaleString('en-IN')}\n\nReply:\n• \"ACCEPT\" - Accept and proceed\n• \"STATUS\" - Check status\n• \"QUESTIONS\" - See FAQs\n• \"HELP\" - Contact support`\n};"
+      },
+      "name": "Sanction - Default Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        1050
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Merge All Responses\nconst items = $input.all();\nconst response = items[0].json;\n\nreturn {\n  message: response.message,\n  conversationId: response.conversationId || items[0].json.conversation?.id,\n  conversationUpdate: response.conversationUpdate || {},\n  timestamp: new Date().toISOString()\n};"
+      },
+      "name": "Merge Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        3850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "tableId": "conversations",
+        "updateKey": "id",
+        "id": "={{$json.conversationId}}",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "current_stage",
+              "fieldValue": "={{$json.conversationUpdate.current_stage}}"
+            },
+            {
+              "fieldName": "current_agent",
+              "fieldValue": "={{$json.conversationUpdate.current_agent}}"
+            },
+            {
+              "fieldName": "session_data",
+              "fieldValue": "={{$json.conversationUpdate.session_data}}"
+            },
+            {
+              "fieldName": "updated_at",
+              "fieldValue": "={{$json.timestamp}}"
+            }
+          ]
+        }
+      },
+      "name": "Update Conversation",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Log Assistant Response\nconst message = $input.item.json.message;\nconst conversationId = $input.item.json.conversationId;\n\nreturn {\n  insert: {\n    conversation_id: conversationId,\n    role: 'assistant',\n    content: message,\n    timestamp: new Date().toISOString()\n  },\n  message\n};"
+      },
+      "name": "Log Assistant Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        4250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { message: $json.message, success: true } }}"
+      },
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        4450,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Incoming Message": {
+      "main": [
+        [
+          {
+            "node": "Parse Webhook Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Webhook Input": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Conversation": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Get Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Get Conversation": {
+      "main": [
+        [
+          {
+            "node": "Conversation Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Exists?": {
+      "main": [
+        [
+          {
+            "node": "Log User Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create New Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create New Conversation": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Create Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Create Conversation": {
+      "main": [
+        [
+          {
+            "node": "Log User Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log User Message": {
+      "main": [
+        [
+          {
+            "node": "Route to Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route to Agent": {
+      "main": [
+        [
+          {
+            "node": "Stage Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage Router": {
+      "main": [
+        [
+          {
+            "node": "Sales - Prepare AI Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verification - Get Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Underwriting - Get App",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanction - Check Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales - Prepare AI Extraction": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Extract Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Extract Info": {
+      "main": [
+        [
+          {
+            "node": "Sales - Validate & Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales - Validate & Merge": {
+      "main": [
+        [
+          {
+            "node": "Sales - All Fields Collected?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales - All Fields Collected?": {
+      "main": [
+        [
+          {
+            "node": "Sales - Create Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sales - Ask Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales - Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Create Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Sales - Format Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales - Format Message": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales - Ask Question": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verification - Get Lead": {
+      "main": [
+        [
+          {
+            "node": "Verification - Create Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verification - Create Application": {
+      "main": [
+        [
+          {
+            "node": "Verification - Parse Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verification - Parse Intent": {
+      "main": [
+        [
+          {
+            "node": "Verification - Document Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verification - Document Prompt": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Underwriting - Get App": {
+      "main": [
+        [
+          {
+            "node": "Underwriting - Assess Risk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Underwriting - Assess Risk": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Save Underwriting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Save Underwriting": {
+      "main": [
+        [
+          {
+            "node": "Underwriting - Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Underwriting - Approved?": {
+      "main": [
+        [
+          {
+            "node": "Underwriting - Approved Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Underwriting - Rejected Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Underwriting - Approved Message": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Underwriting - Rejected Message": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Get Approved App": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Calculate Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Calculate Details": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Generate HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Generate HTML": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Upload Sanction Letter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Upload Sanction Letter": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Prepare Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Prepare Record": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Save Sanction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Save Sanction": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Format Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Format Message": {
+      "main": [
+        [
+          {
+            "node": "Send Sanction Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Check Existing": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Exists?": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Route Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanction - Get Approved App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Route Action": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Accept Logic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanction - Reject Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanction - Status Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanction - Default Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Accept Logic": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Update Accept",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Update Accept": {
+      "main": [
+        [
+          {
+            "node": "Sanction - Accept Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Accept Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Reject Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Status Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanction - Default Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Response": {
+      "main": [
+        [
+          {
+            "node": "Update Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Conversation": {
+      "main": [
+        [
+          {
+            "node": "Log Assistant Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Assistant Message": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-12-06T09:06:02.534Z",
+  "versionId": "1.0.0"
+}
